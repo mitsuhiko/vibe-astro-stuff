@@ -20,6 +20,11 @@ COARSE_SEARCH_THRESHOLD_DEGREES = 30.0
 FINE_SEARCH_THRESHOLD_DEGREES = 3.0
 MIN_ALTITUDE_DEGREES = 5.0
 
+# ISS orbital constants
+ISS_ORBITAL_PERIOD_MINUTES = 93.0  # ISS orbital period in minutes
+ISS_ORBITS_PER_DAY = 1440 / ISS_ORBITAL_PERIOD_MINUTES  # ~15.5 orbits/day
+MOON_ANGULAR_SPEED_DEG_PER_HOUR = 0.5  # Moon moves ~0.5° per hour
+
 
 class ISSMoonTransitCalculator:
     """Calculates ISS-Moon transit events from a given observer location."""
@@ -132,107 +137,197 @@ class ISSMoonTransitCalculator:
         max_distance_km: Optional[float] = None,
         verbose: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Find ISS-Moon transit events within the given time range."""
-        transits = []
-
+        """Find ISS-Moon transit events using fast orbital intersection algorithm."""
+        print("Using fast orbital intersection algorithm...")
+        
         # Convert to Skyfield time
         t0 = self.ts.from_datetime(start_date.replace(tzinfo=pytz.UTC))
         t1 = self.ts.from_datetime(end_date.replace(tzinfo=pytz.UTC))
-
-        # Coarse-to-fine search for speed
-        print("Phase 1: Coarse search (1-hour intervals)...")
-
-        # Phase 1: Coarse search every hour
-        coarse_step = 3600.0 / 86400.0  # 1 hour in days
-        coarse_samples = int((t1.tt - t0.tt) / coarse_step)
-
-        promising_times = []
-
-        above_horizon_count = 0
-
-        for i in range(coarse_samples):
-            t = self.ts.tt_jd(t0.tt + i * coarse_step)
-
-            # Calculate positions and separation
-            iss_relative, moon_relative = self._get_positions(t)
-            iss_alt, _, _ = iss_relative.altaz()
-            moon_alt, _, _ = moon_relative.altaz()
-            separation = self._angular_separation(iss_relative, moon_relative)
-
-            # Count when both are above horizon for reference
-            if iss_alt.degrees > 0 and moon_alt.degrees > 0:
-                above_horizon_count += 1
-
-            # Debug: print some samples regardless of horizon
-            if verbose and i % 24 == 0:  # Every day
-                print(
-                    f"  {t.utc_datetime().strftime('%m-%d %H:%M')}: ISS {iss_alt.degrees:.1f}° Moon {moon_alt.degrees:.1f}° Sep {separation:.1f}°"
-                )
-
-            # Mark as promising if separation is small
-            if separation < COARSE_SEARCH_THRESHOLD_DEGREES:
-                promising_times.append(t)
-                if verbose:
-                    print(
-                        f"  Promising: {t.utc_datetime().strftime('%m-%d %H:%M')} - {separation:.1f}° (ISS {iss_alt.degrees:.1f}° Moon {moon_alt.degrees:.1f}°)"
-                    )
-
+        
+        # Fast orbital-based search
+        return self._fast_orbital_search(t0, t1, verbose)
+    
+    def _fast_orbital_search(self, t0, t1, verbose: bool) -> List[Dict[str, Any]]:
+        """Fast search based on ISS orbital periods and Moon trajectory prediction."""
+        
+        # Step 1: Sample ISS positions at orbital intervals
+        orbital_period_days = ISS_ORBITAL_PERIOD_MINUTES / (24 * 60)
+        total_days = t1.tt - t0.tt
+        num_orbits = int(total_days / orbital_period_days)
+        
+        print(f"Analyzing {num_orbits} ISS orbits over {total_days:.1f} days...")
+        
+        # Sample key points in each orbit (4 points per orbit: quadrants)
+        iss_samples = []
+        for orbit in range(num_orbits):
+            for phase in [0.0, 0.25, 0.5, 0.75]:  # Orbit quadrants
+                t_orbit = self.ts.tt_jd(t0.tt + (orbit + phase) * orbital_period_days)
+                iss_samples.append(t_orbit)
+        
         if verbose:
-            print(
-                f"  Checked {coarse_samples} hours, {above_horizon_count} with both above horizon"
-            )
-
-        print(f"Found {len(promising_times)} promising hour(s)")
-
+            print(f"Generated {len(iss_samples)} ISS sample points")
+        
+        # Step 2: Pre-compute Moon trajectory checkpoints
+        moon_checkpoints = []
+        checkpoint_interval_hours = 3  # Moon position every 3 hours
+        checkpoint_interval_days = checkpoint_interval_hours / 24.0
+        
+        num_checkpoints = int(total_days / checkpoint_interval_days)
+        for i in range(num_checkpoints + 1):
+            t_checkpoint = self.ts.tt_jd(t0.tt + i * checkpoint_interval_days)
+            moon_astrometric = (self.earth + self.observer).at(t_checkpoint).observe(self.moon)
+            moon_relative = moon_astrometric.apparent()
+            moon_alt, moon_az, _ = moon_relative.altaz()
+            
+            moon_checkpoints.append({
+                'time': t_checkpoint,
+                'alt': moon_alt.degrees,
+                'az': moon_az.degrees,
+                'position': moon_relative
+            })
+        
+        if verbose:
+            print(f"Pre-computed {len(moon_checkpoints)} Moon trajectory points")
+        
+        # Step 3: Fast intersection detection
+        promising_times = []
+        
+        for iss_time in iss_samples:
+            # Get ISS position
+            iss_relative = (self.iss_satellite - self.observer).at(iss_time)
+            iss_alt, iss_az, _ = iss_relative.altaz()
+            
+            # Skip if ISS below horizon
+            if iss_alt.degrees < MIN_ALTITUDE_DEGREES:
+                continue
+            
+            # Find nearest Moon checkpoint and interpolate
+            moon_pos = self._interpolate_moon_position(iss_time, moon_checkpoints)
+            if moon_pos is None or moon_pos['alt'] < MIN_ALTITUDE_DEGREES:
+                continue
+            
+            # Quick angular separation check
+            alt_diff = abs(iss_alt.degrees - moon_pos['alt'])
+            az_diff = abs(iss_az.degrees - moon_pos['az'])
+            if az_diff > 180:
+                az_diff = 360 - az_diff
+            
+            # Rough angular distance (faster than full spherical calculation)
+            rough_separation = np.sqrt(alt_diff**2 + (az_diff * np.cos(np.radians(moon_pos['alt'])))**2)
+            
+            if rough_separation < COARSE_SEARCH_THRESHOLD_DEGREES:
+                promising_times.append(iss_time)
+                if verbose:
+                    print(f"  Promising: {iss_time.utc_datetime().strftime('%m-%d %H:%M')} - rough sep {rough_separation:.1f}°")
+        
+        print(f"Fast scan found {len(promising_times)} promising orbital positions")
+        
         if not promising_times:
             return []
-
-        # Phase 2: Fine search around promising times
-        print("Phase 2: Fine search (2-minute intervals around promising times)...")
+        
+        # Step 4: Precise refinement only around promising times
+        print("Refining promising candidates...")
+        return self._refine_candidates(promising_times, verbose)
+    
+    def _interpolate_moon_position(self, target_time, moon_checkpoints):
+        """Interpolate Moon position at target time from pre-computed checkpoints."""
+        if not moon_checkpoints:
+            return None
+        
+        # Find surrounding checkpoints
+        before = None
+        after = None
+        
+        for checkpoint in moon_checkpoints:
+            if checkpoint['time'].tt <= target_time.tt:
+                before = checkpoint
+            elif checkpoint['time'].tt > target_time.tt:
+                after = checkpoint
+                break
+        
+        if before is None:
+            return moon_checkpoints[0]
+        if after is None:
+            return moon_checkpoints[-1]
+        
+        # Linear interpolation
+        time_fraction = (target_time.tt - before['time'].tt) / (after['time'].tt - before['time'].tt)
+        
+        # Interpolate altitude and azimuth
+        alt_interp = before['alt'] + time_fraction * (after['alt'] - before['alt'])
+        
+        # Handle azimuth wraparound
+        az_diff = after['az'] - before['az']
+        if az_diff > 180:
+            az_diff -= 360
+        elif az_diff < -180:
+            az_diff += 360
+        
+        az_interp = before['az'] + time_fraction * az_diff
+        if az_interp < 0:
+            az_interp += 360
+        elif az_interp >= 360:
+            az_interp -= 360
+        
+        return {
+            'alt': alt_interp,
+            'az': az_interp,
+            'time': target_time
+        }
+    
+    def _refine_candidates(self, promising_times, verbose: bool) -> List[Dict[str, Any]]:
+        """Precisely refine promising orbital positions."""
         close_approaches = []
-
+        
         for promising_time in promising_times:
-            # Search ±2 hours around this time with 2-minute resolution
-            start_fine = promising_time.tt - (2.0 / 24.0)  # 2 hours before
-            end_fine = promising_time.tt + (2.0 / 24.0)  # 2 hours after
-
-            fine_step = 120.0 / 86400.0  # 2 minutes in days
-            fine_samples = int((end_fine - start_fine) / fine_step)
-
-            for j in range(fine_samples):
-                t = self.ts.tt_jd(start_fine + j * fine_step)
-
+            # Search ±10 minutes around this orbital position with 30-second resolution
+            search_window_minutes = 10
+            search_window_days = search_window_minutes / (24 * 60)
+            
+            start_refine = promising_time.tt - search_window_days
+            end_refine = promising_time.tt + search_window_days
+            
+            refine_step = 30.0 / 86400.0  # 30 seconds in days
+            refine_samples = int((end_refine - start_refine) / refine_step)
+            
+            best_separation = float('inf')
+            best_time = None
+            
+            for j in range(refine_samples):
+                t = self.ts.tt_jd(start_refine + j * refine_step)
+                
                 iss_relative, moon_relative = self._get_positions(t)
                 iss_alt, _, _ = iss_relative.altaz()
                 moon_alt, _, _ = moon_relative.altaz()
-
-                if (
-                    iss_alt.degrees < MIN_ALTITUDE_DEGREES
-                    or moon_alt.degrees < MIN_ALTITUDE_DEGREES
-                ):
+                
+                if (iss_alt.degrees < MIN_ALTITUDE_DEGREES or 
+                    moon_alt.degrees < MIN_ALTITUDE_DEGREES):
                     continue
-
+                
                 separation = self._angular_separation(iss_relative, moon_relative)
-
+                
+                if separation < best_separation:
+                    best_separation = separation
+                    best_time = t
+                
                 if separation < FINE_SEARCH_THRESHOLD_DEGREES:
-                    close_approaches.append(
-                        {
-                            "time": t,
-                            "separation": separation,
-                            "iss_alt": iss_alt.degrees,
-                            "moon_alt": moon_alt.degrees,
-                        }
-                    )
-
-        print(f"Found {len(close_approaches)} close approach time points")
-
+                    close_approaches.append({
+                        "time": t,
+                        "separation": separation,
+                        "iss_alt": iss_alt.degrees,
+                        "moon_alt": moon_alt.degrees,
+                    })
+            
+            if verbose and best_time is not None:
+                print(f"  Best in window: {best_time.utc_datetime().strftime('%m-%d %H:%M:%S')} - {best_separation:.2f}°")
+        
+        print(f"Refinement found {len(close_approaches)} close approach points")
+        
         # Find local minima (actual transit events)
-        transits = []
         if close_approaches:
-            transits = self._find_transit_events(close_approaches)
-
-        print(f"\nSearch complete! Found {len(transits)} event(s)")
-        return transits
+            return self._find_transit_events(close_approaches)
+        
+        return []
 
     def _find_transit_events(
         self, close_approaches: List[Dict]
