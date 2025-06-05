@@ -145,11 +145,22 @@ class ISSMoonTransitCalculator:
         t0 = self.ts.from_datetime(start_date.replace(tzinfo=pytz.UTC))
         t1 = self.ts.from_datetime(end_date.replace(tzinfo=pytz.UTC))
 
-        # Sample every 5 minutes (much faster search)
-        time_step = 300.0 / 86400.0  # 5 minutes in days
+        # Sample every 1 minute for maximum precision
+        time_step = 60.0 / 86400.0  # 1 minute in days
         num_samples = int((t1.tt - t0.tt) / time_step)
 
         print(f"Searching {num_samples} time points for transits...")
+        print(f"Detection threshold: 3.0° angular separation")
+        
+        # Quick test of ISS positioning
+        test_time = self.ts.now()
+        try:
+            test_iss_pos = self.iss_satellite - self.observer
+            test_iss_relative = test_iss_pos.at(test_time)
+            test_alt, test_az, _ = test_iss_relative.altaz()
+            print(f"ISS test position: {test_alt.degrees:.1f}° altitude, {test_az.degrees:.1f}° azimuth")
+        except Exception as e:
+            print(f"ERROR in ISS positioning: {e}")
 
         # Track when we're close to a transit
         near_transit = False
@@ -166,11 +177,11 @@ class ISSMoonTransitCalculator:
             moon_astrometric = (self.earth + self.observer).at(t).observe(self.moon)
             moon_relative = moon_astrometric.apparent()
 
-            # Skip if ISS or Moon is below horizon
-            iss_alt, _, _ = iss_relative.altaz()
-            moon_alt, _, _ = moon_relative.altaz()
+            # Skip if ISS or Moon is below horizon  
+            iss_alt, iss_az, _ = iss_relative.altaz()
+            moon_alt, moon_az, _ = moon_relative.altaz()
 
-            if iss_alt.degrees < 10 or moon_alt.degrees < 10:
+            if iss_alt.degrees < 5 or moon_alt.degrees < 5:
                 if near_transit and best_time is not None:
                     # We were tracking a close pass that has now ended
                     near_transit = False
@@ -201,10 +212,13 @@ class ISSMoonTransitCalculator:
                 min_separation = float("inf")
                 best_time = None
 
-            # Progress indicator
-            if i % 100 == 0 and i > 0:
+            # Progress indicator with debugging on June 21st
+            if i % 1000 == 0 and i > 0:
                 progress = i / num_samples * 100
                 transits_found = len(transits)
+                current_time = t.utc_datetime()
+                if current_time.day == 21 and current_time.month == 6:
+                    print(f"\nDEBUG {current_time.strftime('%Y-%m-%d %H:%M')}: ISS {iss_alt.degrees:.1f}° Moon {moon_alt.degrees:.1f}° Sep {separation:.2f}°")
                 print(f"Progress: {progress:.1f}% - Found {transits_found} transit(s)", end="\r")
 
         print("\nSearch complete!")
@@ -255,9 +269,9 @@ def calculate_iss_moon_transits(
     """Calculate ISS-Moon transits for the next year from given location."""
     calculator = ISSMoonTransitCalculator(latitude, longitude, elevation)
 
-    # Search for transits in the next 7 days for testing
+    # Search for transits in the next 30 days
     start_date = datetime.now()
-    end_date = start_date + timedelta(days=7)
+    end_date = start_date + timedelta(days=30)
 
     print(f"\nSearching for ISS-Moon transits from {latitude}°, {longitude}°, {elevation}m")
     print(f"Time range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
