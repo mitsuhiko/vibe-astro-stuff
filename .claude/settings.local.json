@@ -3,7 +3,18 @@
     "allow": [
       "Bash(uv sync:*)",
       "Bash(find:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(make test:*)",
+      "Bash(make check-format:*)",
+      "Bash(make format)",
+      "Bash(uv run:*)",
+      "Bash(timeout 30 uv run:*)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(python3:*)",
+      "Bash(rm:*)",
+      "Bash(make lint)"
     ],
     "deny": []
   }

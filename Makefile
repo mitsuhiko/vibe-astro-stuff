@@ -15,12 +15,10 @@ dev:
 # Format code with ruff
 format:
 	uvx ruff format .
-	uvx ruff check --fix .
 
 # Check code formatting
 check-format:
 	uvx ruff format --check .
-	uvx ruff check .
 
 # Lint code with ruff
 lint:
