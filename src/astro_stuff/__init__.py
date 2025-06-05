@@ -40,11 +40,17 @@ def hello() -> None:
     default=None,
     help="Maximum preferred travel distance in km",
 )
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show verbose debug information during search",
+)
 def iss_moon_transit(
-    latitude: float, longitude: float, elevation: float, max_distance: float | None
+    latitude: float, longitude: float, elevation: float, max_distance: float | None, verbose: bool
 ) -> None:
     """Calculate when the ISS transits in front of the moon from your location."""
-    transits = calculate_iss_moon_transits(latitude, longitude, elevation, max_distance)
+    transits = calculate_iss_moon_transits(latitude, longitude, elevation, max_distance, verbose)
 
     if not transits:
         click.echo("\nNo ISS-Moon transits or close passes found in the next year from your location.")
@@ -70,7 +76,7 @@ def iss_moon_transit(
         
         click.echo(f"{event_type} #{i}:")
         click.echo(f"  Date/Time (UTC): {transit['time'].strftime('%a %Y-%m-%d, %H:%M:%S.%f')[:-4]}")
-        click.echo(f"  ISS angular size: {transit['iss_angular_size_arcmin'] * 60:.2f}″; distance: {transit['iss_distance_km']:.2f} km")
+        click.echo(f"  ISS angular size: {transit['iss_angular_size_arcsec']:.2f}″; distance: {transit['iss_distance_km']:.2f} km")
         click.echo(f"  Angular separation: {sep_deg_int}° {sep_arcmin_int}′ {sep_arcsec:.0f}″; azimuth: {transit['iss_azimuth']:.1f}°; altitude: {transit['iss_altitude']:.1f}°")
         click.echo(f"  Moon illumination: {transit['moon_illumination']:.1f}%")
         click.echo()
