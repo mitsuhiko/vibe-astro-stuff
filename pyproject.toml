@@ -1,0 +1,19 @@
+[project]
+name = "astro-stuff"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Armin Ronacher", email = "armin.ronacher@active-4.com" }
+]
+requires-python = ">=3.12.1"
+dependencies = [
+    "click",
+]
+
+[project.scripts]
+astro-stuff = "astro_stuff:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
