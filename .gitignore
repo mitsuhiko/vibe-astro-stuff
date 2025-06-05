@@ -8,3 +8,11 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Skyfield cache files (ephemeris data)
+de421.bsp
+*.bsp
+leap-seconds.dat
+deltat.data
+deltat.preds
+finals2000A.all
