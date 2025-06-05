@@ -11,6 +11,12 @@ dependencies = [
     "click",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+]
+
 [project.scripts]
 astro-stuff = "astro_stuff:main"
 
